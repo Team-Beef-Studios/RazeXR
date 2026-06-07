@@ -1,4 +1,17 @@
-rootProject.projectDir = new File(settingsDir, '../..')
-rootProject.name = "RazeXR"
+pluginManagement {
+    repositories {
+        google()
+        mavenCentral()
+        gradlePluginPortal()
+    }
+}
 
-include ':', 'Projects:Android'
+dependencyResolutionManagement {
+    repositoriesMode.set(RepositoriesMode.PREFER_SETTINGS)
+    repositories {
+        google()
+        mavenCentral()
+    }
+}
+
+rootProject.name = "RazeXR"

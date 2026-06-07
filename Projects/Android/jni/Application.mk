@@ -14,7 +14,8 @@ RAZE_DIR		:= $(APPLICATIONMK_PATH)/Raze
 APP_STL := c++_shared
 
 # Make sure every shared lib includes a .note.gnu.build-id header, for crash reporting
-APP_LDFLAGS := -Wl,--build-id
+# -z nostart-stop-gc prevents linker from GC'ing __start_/__stop_ symbols used by autosegs
+APP_LDFLAGS := -Wl,--build-id -Wl,-z,nostart-stop-gc
 
 NDK_TOOLCHAIN_VERSION := clang
 

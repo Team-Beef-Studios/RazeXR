@@ -2,8 +2,6 @@
 package com.drbeef.razexr;
 
 
-import static android.system.Os.setenv;
-
 import java.io.BufferedReader;
 import java.io.File;
 import java.io.FileInputStream;
@@ -13,59 +11,54 @@ import java.io.FileReader;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
-import java.util.Locale;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipInputStream;
 
 import android.Manifest;
 import android.annotation.SuppressLint;
 import android.app.Activity;
+import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.content.res.AssetManager;
-
+import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
+import android.os.Environment;
 import android.os.RemoteException;
+import android.provider.Settings;
 import android.util.Log;
 import android.view.SurfaceHolder;
 import android.view.SurfaceView;
 import android.view.WindowManager;
-import android.view.KeyEvent;
 
-import android.support.v4.app.ActivityCompat;
-import android.support.v4.content.ContextCompat;
+import androidx.core.app.ActivityCompat;
+import androidx.core.content.ContextCompat;
 
 import com.drbeef.externalhapticsservice.HapticServiceClient;
 
 @SuppressLint("SdCardPath") public class GLES3JNIActivity extends Activity implements SurfaceHolder.Callback
 {
-	private static String manufacturer = "";
-	
 	// Load the gles3jni library right away to make sure JNI_OnLoad() gets called as the very first thing.
 	static
 	{
-		manufacturer = Build.MANUFACTURER.toLowerCase(Locale.ROOT);
-		if (manufacturer.contains("oculus")) // rename oculus to meta as this will probably happen in the future anyway
-		{
-			manufacturer = "meta";
-		}
-
+		// Load single Khronos OpenXR loader - works on all platforms (Meta, Pico, etc.)
 		try
 		{
-			//Load manufacturer specific loader
-			System.loadLibrary("openxr_loader_" + manufacturer);
-			setenv("OPENXR_HMD", manufacturer, true);
+			System.loadLibrary("openxr_loader");
 		} catch (Exception e)
-		{}
-		
+		{
+			Log.e("RazeXR", "Failed to load OpenXR loader: " + e.getMessage());
+		}
+
 		System.loadLibrary( "raze" );
 	}
 
 	private static final String TAG = "RazeXR";
 
-	private int permissionCount = 0;
+	private boolean permissionsGranted = false;
 	private static final int READ_EXTERNAL_STORAGE_PERMISSION_ID = 1;
 	private static final int WRITE_EXTERNAL_STORAGE_PERMISSION_ID = 2;
+	private static final int MANAGE_EXTERNAL_STORAGE_PERMISSION_ID = 3;
 
 	private HapticServiceClient externalHapticsServiceClient = null;
 
@@ -99,37 +92,81 @@ import com.drbeef.externalhapticsservice.HapticServiceClient;
 		checkPermissionsAndInitialize();
 	}
 
+	/** Check if this is a VR platform that handles permissions differently */
+	private boolean isVRPlatform() {
+		String manufacturer = Build.MANUFACTURER.toLowerCase();
+		return manufacturer.contains("oculus") || manufacturer.contains("meta") || manufacturer.contains("pico");
+	}
+
 	/** Initializes the Activity only if the permission has been granted. */
 	private void checkPermissionsAndInitialize() {
-		// Boilerplate for checking runtime permissions in Android.
-		if (ContextCompat.checkSelfPermission(this, Manifest.permission.WRITE_EXTERNAL_STORAGE)
-				!= PackageManager.PERMISSION_GRANTED){
-			ActivityCompat.requestPermissions(
-					GLES3JNIActivity.this,
-					new String[] {Manifest.permission.WRITE_EXTERNAL_STORAGE},
-					WRITE_EXTERNAL_STORAGE_PERMISSION_ID);
-		}
-		else
-		{
-			permissionCount++;
+		Log.v(TAG, "checkPermissionsAndInitialize() - SDK: " + Build.VERSION.SDK_INT + ", Manufacturer: " + Build.MANUFACTURER);
+
+		// Android 11+ (API 30+) requires MANAGE_EXTERNAL_STORAGE for /sdcard access
+		if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+			if (Environment.isExternalStorageManager()) {
+				Log.v(TAG, "Already have MANAGE_EXTERNAL_STORAGE permission");
+				permissionsGranted = true;
+			} else {
+				Log.v(TAG, "Requesting MANAGE_EXTERNAL_STORAGE permission");
+				try {
+					Intent intent = new Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION);
+					intent.setData(Uri.parse("package:" + getPackageName()));
+					startActivityForResult(intent, MANAGE_EXTERNAL_STORAGE_PERMISSION_ID);
+					return;
+				} catch (Exception e) {
+					Log.e(TAG, "Failed to launch permission settings: " + e.getMessage());
+					// Settings might not be available - try to proceed anyway
+					Log.v(TAG, "Attempting to proceed without explicit permission");
+					permissionsGranted = true;
+				}
+			}
+		} else {
+			// Legacy permission handling for Android 10 and below
+			if (ContextCompat.checkSelfPermission(this, Manifest.permission.WRITE_EXTERNAL_STORAGE)
+					!= PackageManager.PERMISSION_GRANTED){
+				ActivityCompat.requestPermissions(
+						GLES3JNIActivity.this,
+						new String[] {Manifest.permission.WRITE_EXTERNAL_STORAGE},
+						WRITE_EXTERNAL_STORAGE_PERMISSION_ID);
+				return;
+			} else if (ContextCompat.checkSelfPermission(this, Manifest.permission.READ_EXTERNAL_STORAGE)
+					!= PackageManager.PERMISSION_GRANTED){
+				ActivityCompat.requestPermissions(
+						GLES3JNIActivity.this,
+						new String[] {Manifest.permission.READ_EXTERNAL_STORAGE},
+						READ_EXTERNAL_STORAGE_PERMISSION_ID);
+				return;
+			}
+			else
+			{
+				permissionsGranted = true;
+			}
 		}
 
-		if (ContextCompat.checkSelfPermission(this, Manifest.permission.READ_EXTERNAL_STORAGE)
-				!= PackageManager.PERMISSION_GRANTED)
-		{
-			ActivityCompat.requestPermissions(
-					GLES3JNIActivity.this,
-					new String[] {Manifest.permission.READ_EXTERNAL_STORAGE},
-					READ_EXTERNAL_STORAGE_PERMISSION_ID);
-		}
-		else
-		{
-			permissionCount++;
-		}
-
-		if (permissionCount == 2) {
+		if (permissionsGranted) {
 			// Permissions have already been granted.
 			create();
+		}
+	}
+
+	@Override
+	protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+		super.onActivityResult(requestCode, resultCode, data);
+		Log.v(TAG, "onActivityResult() - requestCode: " + requestCode + ", resultCode: " + resultCode);
+		if (requestCode == MANAGE_EXTERNAL_STORAGE_PERMISSION_ID) {
+			if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+				if (Environment.isExternalStorageManager()) {
+					Log.v(TAG, "MANAGE_EXTERNAL_STORAGE permission granted");
+					permissionsGranted = true;
+					create();
+				} else {
+					// Don't exit immediately - try to proceed anyway on VR platforms
+					Log.w(TAG, "MANAGE_EXTERNAL_STORAGE permission not granted - attempting to proceed anyway");
+					permissionsGranted = true;
+					create();
+				}
+			}
 		}
 	}
 
@@ -137,21 +174,13 @@ import com.drbeef.externalhapticsservice.HapticServiceClient;
 	@Override
 	public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] results) {
 		if (requestCode == READ_EXTERNAL_STORAGE_PERMISSION_ID) {
-			if (results.length > 0 && results[0] == PackageManager.PERMISSION_GRANTED) {
-				permissionCount++;
-			}
-			else
-			{
+			if (results.length > 0 && results[0] != PackageManager.PERMISSION_GRANTED) {
 				System.exit(0);
 			}
 		}
 
 		if (requestCode == WRITE_EXTERNAL_STORAGE_PERMISSION_ID) {
-			if (results.length > 0 && results[0] == PackageManager.PERMISSION_GRANTED) {
-				permissionCount++;
-			}
-			else
-			{
+			if (results.length > 0 && results[0] != PackageManager.PERMISSION_GRANTED) {
 				System.exit(0);
 			}
 		}
@@ -314,7 +343,10 @@ import com.drbeef.externalhapticsservice.HapticServiceClient;
 		Log.v( TAG, "GLES3JNIActivity::onStart()" );
 		super.onStart();
 
-		GLES3JNILib.onStart( mNativeHandle, this );
+		if ( mNativeHandle != 0 )
+		{
+			GLES3JNILib.onStart( mNativeHandle, this );
+		}
 	}
 
 	@Override protected void onResume()
@@ -322,20 +354,29 @@ import com.drbeef.externalhapticsservice.HapticServiceClient;
 		Log.v( TAG, "GLES3JNIActivity::onResume()" );
 		super.onResume();
 
-		GLES3JNILib.onResume( mNativeHandle );
+		if ( mNativeHandle != 0 )
+		{
+			GLES3JNILib.onResume( mNativeHandle );
+		}
 	}
 
 	@Override protected void onPause()
 	{
 		Log.v( TAG, "GLES3JNIActivity::onPause()" );
-		GLES3JNILib.onPause( mNativeHandle );
+		if ( mNativeHandle != 0 )
+		{
+			GLES3JNILib.onPause( mNativeHandle );
+		}
 		super.onPause();
 	}
 
 	@Override protected void onStop()
 	{
 		Log.v( TAG, "GLES3JNIActivity::onStop()" );
-		GLES3JNILib.onStop( mNativeHandle );
+		if ( mNativeHandle != 0 )
+		{
+			GLES3JNILib.onStop( mNativeHandle );
+		}
 		super.onStop();
 	}
 

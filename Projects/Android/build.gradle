@@ -1,86 +1,260 @@
-apply plugin: 'com.android.application'
-apply from: "${rootProject.projectDir}/XrApp.gradle"
+import com.android.ddmlib.AndroidDebugBridge
+import com.android.ddmlib.IDevice
+import com.android.ddmlib.CollectingOutputReceiver
+
+plugins {
+    id 'com.android.application' version '8.2.0'
+}
 
 android {
-  // This is the name of the generated apk file, which will have
-  // -debug.apk or -release.apk appended to it.
-  // The filename doesn't effect the Android installation process.
-  // Use only letters to remain compatible with the package name.
-  project.archivesBaseName = "razexr"
+    namespace 'com.drbeef.razexr'
+    compileSdk 34
+    buildToolsVersion '34.0.0'
+    ndkVersion '26.1.10909125'
 
-  defaultConfig {
-    // Gradle replaces the manifest package with this value, which must
-    // be unique on a system.  If you don't change it, a new app
-    // will replace an older one.
-    applicationId "com.drbeef." + project.archivesBaseName
+    // APK filename
+    project.archivesBaseName = "razexr"
 
-    // override app plugin abiFilters for both 32 and 64-bit support
-      externalNativeBuild {
-          ndk {
-              abiFilters 'arm64-v8a'
-          }
-          ndkBuild {
-              abiFilters 'arm64-v8a'
-          }
-      }
+    defaultConfig {
+        applicationId "com.drbeef.razexr"
+        minSdk 26
+        targetSdk 32
 
-/*      packagingOptions {
-          doNotStrip '**.so'
-      }
-*/
-      minSdkVersion 26
-      targetSdkVersion 26
-  }
-
-  sourceSets {
-    main {
-      manifest.srcFile 'AndroidManifest.xml'
-      java.srcDirs = ['../../java']
-      jniLibs.srcDir 'libs'
-      res.srcDirs = ['../../res']
-      assets.srcDirs = ['../../assets']
-    }
-  }
-    compileOptions {
-        sourceCompatibility = '1.8'
-        targetCompatibility = '1.8'
-    }
-
-    packagingOptions {
-        exclude 'lib/arm64-v8a/libopenxr_loader.so'
-    }
-
-/*    buildTypes {
-        release {
-            debuggable true
+        externalNativeBuild {
+            ndk {
+                abiFilters 'arm64-v8a'
+            }
+            ndkBuild {
+                def numProcs = Runtime.runtime.availableProcessors()
+                abiFilters 'arm64-v8a'
+                arguments "V=0", "-j$numProcs", "-C$project.projectDir", "APP_PLATFORM=android-26", "NDK_TOOLCHAIN_VERSION=clang", "APP_STL=c++_static"
+                // Specify the target to help Android Studio discover sources
+                targets "raze"
+            }
         }
-    }*/
+    }
 
-    compileSdkVersion = 26
-    buildToolsVersion = '29.0.1'
+    externalNativeBuild {
+        ndkBuild {
+            path 'jni/Android.mk'
+        }
+    }
+
+    signingConfigs {
+        def keystorePath = project.hasProperty('key.store') ?
+            new File(project.getProperty('key.store')) :
+            project.file('android.debug.keystore')
+
+        def keystorePassword = project.hasProperty('key.store.password') ?
+            project.getProperty('key.store.password') : 'android'
+
+        def keystoreKeyAlias = project.hasProperty('key.alias') ?
+            project.getProperty('key.alias') : 'androiddebugkey'
+
+        def keystoreKeyPassword = project.hasProperty('key.alias.password') ?
+            project.getProperty('key.alias.password') : 'android'
+
+        debug {
+            storeFile keystorePath
+            storePassword keystorePassword
+            keyAlias keystoreKeyAlias
+            keyPassword keystoreKeyPassword
+            v1SigningEnabled true
+            v2SigningEnabled true
+        }
+
+        release {
+            storeFile keystorePath
+            storePassword keystorePassword
+            keyAlias keystoreKeyAlias
+            keyPassword keystoreKeyPassword
+            v1SigningEnabled true
+            v2SigningEnabled true
+        }
+    }
+
+    buildTypes {
+        debug {
+            signingConfig signingConfigs.debug
+            debuggable true
+            jniDebuggable true
+
+            externalNativeBuild {
+                ndkBuild {
+                    arguments "NDK_DEBUG=1", "USE_ASAN=1"
+                }
+            }
+        }
+
+        release {
+            signingConfig signingConfigs.release
+            debuggable true
+            jniDebuggable false
+
+            externalNativeBuild {
+                ndkBuild {
+                    arguments "NDK_DEBUG=0", "USE_ASAN=0"
+                }
+            }
+        }
+    }
+
+    sourceSets {
+        main {
+            manifest.srcFile 'AndroidManifest.xml'
+            java.srcDirs = ['../../java']
+            jniLibs.srcDir 'libs'
+            res.srcDirs = ['../../res']
+            assets.srcDirs = ['../../assets']
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_11
+        targetCompatibility JavaVersion.VERSION_11
+    }
 }
 
 dependencies {
-    implementation "com.android.support:support-compat:26.1.0"
-    implementation "com.android.support:support-core-utils:26.1.0"
+    implementation 'androidx.core:core:1.12.0'
     implementation fileTree(dir: 'libs', include: ['*.jar', '*.aar'])
 }
 
-repositories {
-    google()
+// Pack Raze assets into pk3
+tasks.register('packRazeAssets', Zip) {
+    from 'jni/Raze/wadsrc/static'
+    destinationDirectory = file('../../assets/')
+    archiveFileName = 'raze.pk3'
 }
-buildscript {
-    repositories {
-        google()
+
+// Ensure assets are packed before any task that needs them
+android.applicationVariants.all { variant ->
+    variant.mergeAssetsProvider.configure {
+        dependsOn packRazeAssets
     }
 }
 
-task packRazeAssets(type: Zip) {
-    from "jni/Raze/wadsrc/static"
-    destinationDir file("../../assets/")
-    archiveName "raze.pk3"
+// Also ensure lint tasks depend on packRazeAssets
+afterEvaluate {
+    tasks.matching { it.name.contains('lint') || it.name.contains('Lint') }.configureEach {
+        dependsOn packRazeAssets
+    }
 }
 
-tasks.matching {it.name.startsWith("assemble")}.all { Task task ->
-    task.dependsOn([packRazeAssets])
+// Clean workaround for .externalNativeBuild
+tasks.register('cleanWorkAround') {
+    description 'Workaround for .externalNativeBuild not being deleted on clean'
+    doLast {
+        delete file('.externalNativeBuild')
+    }
+}
+clean.dependsOn cleanWorkAround
+
+// Device installation helpers
+void installApk(IDevice device, File apkFile, String applicationId) {
+    logger.quiet "Installing ${applicationId} on device ${device.serialNumber}"
+    String toinstall = "/data/local/tmp/toinstall.apk"
+    try {
+        device.pushFile(apkFile.path, toinstall)
+    } catch (Exception e) {
+        throw new RuntimeException("Failed to push ${apkFile.path} to ${toinstall}. ${e}", e)
+    }
+    while (true) {
+        try {
+            device.installRemotePackage(toinstall, true)
+            break
+        } catch (Exception e) {
+            logger.quiet "Failed to install ${applicationId} on device ${device.serialNumber} (${e}). Trying to uninstall first."
+        }
+        try {
+            device.uninstallPackage(applicationId)
+        } catch (Exception e) {
+            throw new RuntimeException("Failed to uninstall ${applicationId}. ${e}", e)
+        }
+    }
+}
+
+void stopApkOnDevice(IDevice device, String packageName) {
+    CollectingOutputReceiver receiver = new CollectingOutputReceiver()
+    device.executeShellCommand("am force-stop ${packageName}", receiver)
+}
+
+void runApk(IDevice device, File manifestFile) {
+    CollectingOutputReceiver receiver = new CollectingOutputReceiver()
+    def activityClass = new XmlSlurper().parse(manifestFile).application.activity.find { it.'intent-filter'.find { filter ->
+        return filter.action.find { it.'@android:name'.text() == 'android.intent.action.MAIN' } &&
+            (filter.category.find { it.'@android:name'.text() == 'android.intent.category.LAUNCHER' } ||
+             filter.category.find { it.'@android:name'.text() == 'android.intent.category.INFO' })
+    }}.'@android:name'
+    def startActivity = "${android.defaultConfig.applicationId}/${activityClass}"
+    logger.quiet "Starting '${startActivity}' on ${project.ext.deviceMap.size()} devices:"
+    logger.quiet "- ${device.serialNumber}"
+    device.executeShellCommand("am start ${startActivity}", receiver)
+}
+
+afterEvaluate {
+    tasks.register('initDeviceList') {
+        doLast {
+            project.ext.deviceMap = [:]
+            if (project.hasProperty('should_install')) {
+                AndroidDebugBridge.initIfNeeded(false)
+                AndroidDebugBridge bridge = AndroidDebugBridge.createBridge(android.adbExecutable.absolutePath, false)
+
+                long timeOut = 30000
+                int sleepTime = 1000
+                while (!bridge.hasInitialDeviceList() && timeOut > 0) {
+                    sleep(sleepTime)
+                    timeOut -= sleepTime
+                }
+                if (timeOut <= 0 && !bridge.hasInitialDeviceList()) {
+                    throw new RuntimeException("Timeout getting device list.", null)
+                }
+
+                if (project.hasProperty('should_install')) {
+                    bridge.devices.split { it.getProperty("ro.serialno") != it.serialNumber }.each {
+                        it.collectEntries(project.ext.deviceMap, { [(it.getProperty("ro.serialno")): it] })
+                    }
+                }
+            }
+        }
+    }
+
+    tasks.register('stopApk') {
+        dependsOn 'initDeviceList'
+        description 'Stops app if currently running on device'
+        doLast {
+            project.ext.deviceMap.each { deviceSerial, device ->
+                stopApkOnDevice(device, android.defaultConfig.applicationId)
+            }
+        }
+    }
+
+    android.applicationVariants.all { variant ->
+        tasks.register("installAndRun${variant.name.capitalize()}") {
+            dependsOn variant.assembleProvider.get()
+            dependsOn 'initDeviceList'
+            onlyIf { project.hasProperty('should_install') }
+            description 'Installs and runs the APK file'
+            doLast {
+                variant.outputs.each { output ->
+                    if (output.outputFile.exists()) {
+                        if (project.ext.deviceMap.size() == 0) {
+                            logger.quiet "Install requested, but no devices found."
+                        } else {
+                            project.ext.deviceMap.each { deviceSerial, device ->
+                                installApk(device, output.outputFile, android.defaultConfig.applicationId)
+                                runApk(device, new File(variant.outputs[0].processManifestProvider.get().manifestOutputDirectory.get().asFile, "AndroidManifest.xml"))
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        variant.assembleProvider.get().finalizedBy "installAndRun${variant.name.capitalize()}"
+    }
+}
+
+// Workaround for prepareKotlinBuildScriptModel error in Android Studio
+if (!tasks.findByName("prepareKotlinBuildScriptModel")) {
+    tasks.register("prepareKotlinBuildScriptModel") {}
 }

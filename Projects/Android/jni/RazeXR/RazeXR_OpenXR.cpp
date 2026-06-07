@@ -293,26 +293,17 @@ void VR_FrameSetup()
 
 bool VR_GetVRProjection(int eye, float zNear, float zFar, float* projection)
 {
-	if (strstr(gAppState.OpenXRHMD, "pico") != NULL)
-	{
-		XrMatrix4x4f_CreateProjectionFov(
-				&(gAppState.ProjectionMatrices[eye]), GRAPHICS_OPENGL_ES,
-				gAppState.Projections[eye].fov, zNear, zFar);
-	}
 
-	if (strstr(gAppState.OpenXRHMD, "meta") != NULL)
-	{
-		XrFovf fov = {};
-		for (int eye = 0; eye < ovrMaxNumEyes; eye++) {
-			fov.angleLeft += gAppState.Projections[eye].fov.angleLeft / 2.0f;
-			fov.angleRight += gAppState.Projections[eye].fov.angleRight / 2.0f;
-			fov.angleUp += gAppState.Projections[eye].fov.angleUp / 2.0f;
-			fov.angleDown += gAppState.Projections[eye].fov.angleDown / 2.0f;
-		}
-		XrMatrix4x4f_CreateProjectionFov(
-				&(gAppState.ProjectionMatrices[eye]), GRAPHICS_OPENGL_ES,
-				fov, zNear, zFar);
-	}
+    XrFovf fov = {
+            gAppState.Projections[0].fov.angleLeft,
+            gAppState.Projections[1].fov.angleRight,
+            gAppState.Projections[0].fov.angleUp,
+            gAppState.Projections[0].fov.angleDown
+    };
+
+    XrMatrix4x4f_CreateProjectionFov(
+            &(gAppState.ProjectionMatrices[eye]), GRAPHICS_OPENGL_ES,
+            fov, zNear, zFar);
 	
 	memcpy(projection, gAppState.ProjectionMatrices[eye].m, 16 * sizeof(float));
 	return true;

@@ -7,11 +7,11 @@ import org.apache.tools.ant.taskdefs.condition.Os
 buildscript {
   repositories {
     google()
-    jcenter()
+    mavenCentral()
   }
 
   dependencies {
-    classpath 'com.android.tools.build:gradle:4.0.0'
+    classpath 'com.android.tools.build:gradle:8.2.0'
   }
 
   tasks.register("wrapper")
